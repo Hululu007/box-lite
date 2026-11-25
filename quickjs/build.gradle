@@ -3,13 +3,13 @@ plugins {
 }
 
 android {
-    // 1.0.14：由 33 统一为 30，与 app/player 一致。本模块只用预编译 jniLibs（wrapper 的
-    // externalNativeBuild 已注释），不引用 API 31+ 的任何接口，无需 SDK 33。
-    compileSdkVersion 30
+    namespace 'com.whl.quickjs.android'
+
+    compileSdk 35
 
     defaultConfig {
-        minSdkVersion 16
-        targetSdkVersion 26
+        minSdk 21
+        targetSdk 26
         externalNativeBuild {
             cmake {
                 abiFilters 'armeabi-v7a'
@@ -40,6 +40,10 @@ android {
             path file('src/main/cpp/CMakeLists.txt')
             version "3.10.2"
         }*/
+    }
+    lint {
+        checkReleaseBuilds false
+        abortOnError false
     }
 }
 

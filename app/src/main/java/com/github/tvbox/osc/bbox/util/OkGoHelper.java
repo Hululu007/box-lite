@@ -41,11 +41,11 @@ import javax.net.ssl.SSLSocketFactory;
 import javax.net.ssl.X509TrustManager;
 
 import okhttp3.Cache;
+import okhttp3.ConnectionSpec;
 import okhttp3.Dns;
 import okhttp3.HttpUrl;
 import okhttp3.OkHttpClient;
 import okhttp3.dnsoverhttps.DnsOverHttps;
-import okhttp3.internal.Version;
 import xyz.doikki.videoplayer.exo.ExoMediaSourceHelper;
 
 
@@ -71,6 +71,10 @@ public class OkGoHelper {
             loggingInterceptor.setColorLevel(Level.OFF);
         }
         builder.addInterceptor(loggingInterceptor);
+
+        // v1.1.3 修复：okhttp 4.x 默认 MODERN_TLS 密码套件较窄，老安卓盒子/老 TLS 服务器可能无共同套件 → 握手失败
+        // （okhttp 3.12 时代为宽集合；多源订阅等 OkGo 请求在真机上报“请求失败”即此因）。恢复 3.x 等价的宽集合：
+        builder.connectionSpecs(Arrays.asList(ConnectionSpec.COMPATIBLE_TLS, ConnectionSpec.CLEARTEXT));
 
         builder.retryOnConnectionFailure(true);
         builder.followRedirects(true);
@@ -167,12 +171,16 @@ public class OkGoHelper {
             loggingInterceptor.setColorLevel(Level.OFF);
         }
         builder.addInterceptor(loggingInterceptor);
+        // v1.1.3 修复：同上，DoH 引导客户端也用宽 TLS 套件
+        builder.connectionSpecs(Arrays.asList(ConnectionSpec.COMPATIBLE_TLS, ConnectionSpec.CLEARTEXT));
         try {
             setOkHttpSsl(builder);
         } catch (Throwable th) {
             th.printStackTrace();
         }
         builder.cache(new Cache(new File(App.getInstance().getCacheDir().getAbsolutePath(), "dohcache"), 100 * 1024 * 1024));
+        // v2.0.0（B2）：DoH 引导客户端强制 5s 总超时，防止 DoH 服务器不可达时单次解析长卡
+        builder.callTimeout(5, TimeUnit.SECONDS);
         OkHttpClient dohClient = builder.build();
         String dohUrl = getDohUrl(Hawk.get(HawkConfig.DOH_URL, 0));
 //        if (!dohUrl.isEmpty()) is_doh = true;
@@ -194,11 +202,13 @@ public class OkGoHelper {
         @NonNull
         @Override
         public List<InetAddress> lookup(@NonNull String hostname) throws UnknownHostException {
-            if (myHosts == null){
-                myHosts = ApiConfig.get().getMyHost(); //确保只获取一次减少消耗
-            }
-            else if(!myHosts.isEmpty() && myHosts.containsKey(hostname)) {
-                hostname=myHosts.get(hostname);
+            // v2.0.0（B1）：改为每次读取 ApiConfig 持有的最新 hosts 引用。
+            // 此前静态快照缓存永不刷新（首次取值后不再更新，换配置后 hosts 失效），
+            // 导致配置里的 hosts 映射功能形同虚设。
+            Map<String, String> hosts = ApiConfig.get().getMyHost();
+            if (hosts != null && hosts.containsKey(hostname)) {
+                String mapped = hosts.get(hostname);
+                if (mapped != null && !mapped.isEmpty()) hostname = mapped;
             }
             assert hostname != null;
             if (isValidIpAddress(hostname)) {
@@ -293,6 +303,9 @@ public class OkGoHelper {
 
         builder.addInterceptor(loggingInterceptor);
 
+        // v1.1.3 修复：同上，OkGo/Picasso 主客户端也用宽 TLS 套件
+        builder.connectionSpecs(Arrays.asList(ConnectionSpec.COMPATIBLE_TLS, ConnectionSpec.CLEARTEXT));
+
         builder.readTimeout(DEFAULT_MILLISECONDS, TimeUnit.MILLISECONDS);
         builder.writeTimeout(DEFAULT_MILLISECONDS, TimeUnit.MILLISECONDS);
         builder.connectTimeout(DEFAULT_MILLISECONDS, TimeUnit.MILLISECONDS);
@@ -304,7 +317,8 @@ public class OkGoHelper {
             th.printStackTrace();
         }
 
-        HttpHeaders.setUserAgent(Version.userAgent());
+        // okhttp 4.x 移除了 okhttp3.internal.Version，其 userAgent() 原为 "okhttp/<版本>"
+        HttpHeaders.setUserAgent("okhttp/4.12.0");
 
         OkHttpClient okHttpClient = builder.build();
         OkGo.getInstance().setOkHttpClient(okHttpClient);

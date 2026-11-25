@@ -1,0 +1,19 @@
+// Top-level build file (AGP 8.13 / Gradle 8.13 / JDK 21)
+plugins {
+    // chaquopy 15.0 是最后一个支持 minSdk 21 的版本（Python 3.8-3.12 / AGP 7.0-8.5）
+    id 'com.android.application' version '8.5.2' apply false
+    id 'com.android.library' version '8.5.2' apply false
+    id 'com.chaquo.python' version '15.0.1' apply false
+}
+
+subprojects {
+    configurations.all {
+        // smbj 0.15.0 传递的 bcprov-jdk18on 1.85.2 为 Java 25 字节码（class major 69），Jetifier 无法解析；
+        // 锁定 1.79（Java 8 字节码，且为本机缓存已有版本），BC 加解密 API 对 smbj 向后兼容
+        resolutionStrategy.force 'org.bouncycastle:bcprov-jdk18on:1.79', 'org.bouncycastle:bcpkix-jdk18on:1.79'
+        // 重复类：chaquopy_java 的 annotations-java5 与 kotlin-stdlib 的 annotations 同类名冲突，保留后者
+        exclude group: 'org.jetbrains', module: 'annotations-java5'
+        // 重复类：app 的 xstream(xpp3_min) 与 catvod 的 sardine-android→simple-xml(xpp3) 同为 org.xmlpull，保留 xpp3
+        exclude group: 'xpp3', module: 'xpp3_min'
+    }
+}

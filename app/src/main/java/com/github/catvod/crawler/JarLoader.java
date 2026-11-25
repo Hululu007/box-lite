@@ -169,11 +169,12 @@ public class JarLoader {
                     e.printStackTrace();
                 }
             }
-            // B-07：下载完成立即校验，不匹配则删除，绝不加载未校验的代码
+            // v2.0.1（B-07 修订·兼容优先）：";md5;" 在生态里常被当缓存刷新标记而非真实 MD5，
+            // 强校验拒载会打死这类源（且 md5 与 jar 同通道传输，对真实 MITM 无实质增益）。
+            // 不匹配只记日志知情，照常加载；若下载内容确已损坏（如网关错误页），
+            // loadClassLoader 自然失败，且缓存 md5 不匹配会在下次触发重新下载，自愈。
             if (!md5.isEmpty() && !MD5.getFileMd5(cache).equalsIgnoreCase(md5)) {
-                Log.e("JarLoader", "echo-jar md5 mismatch, discard");
-                cache.delete();
-                return null;
+                Log.e("JarLoader", "echo-jar md5 mismatch (config=" + md5 + ", actual=" + MD5.getFileMd5(cache) + "), still load for compatibility");
             }
             loadClassLoader(cache.getAbsolutePath(), key);
             return classLoaders.get(key);

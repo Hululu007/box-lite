@@ -106,10 +106,7 @@ public class ApiDialog extends BaseDialog {
 
                         listener.onchange("api-" + newApi);
                     }
-                    if(map.size()>30){
-                        map.remove(nameHistory.get(30));
-                        nameHistory.remove(30);
-                    }
+                    // 已移除 30 条上限：线路历史完整保留
                     Hawk.put(HawkConfig.API_NAME_HISTORY, nameHistory);
                     Hawk.put(HawkConfig.API_MAP, map);
                     dismiss();

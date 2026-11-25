@@ -25,6 +25,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import okhttp3.CacheControl;
 import okhttp3.Call;
@@ -221,7 +222,10 @@ public class DnsOverHttps implements Dns {
         }
 
         try {
-            latch.await();
+            // v2.0.0（B2）：带超时等待（此前 latch.await() 无限等，叠加 DoH 不可达时单次解析长卡）
+            if (!latch.await(5, TimeUnit.SECONDS)) {
+                failures.add(new IOException("DoH query timed out"));
+            }
         } catch (InterruptedException e) {
             failures.add(e);
         }
@@ -257,7 +261,7 @@ public class DnsOverHttps implements Dns {
         unknownHostException.initCause(failure);
 
         for (int i = 1; i < failures.size(); i++) {
-            Util.addSuppressedIfPossible(unknownHostException, failures.get(i));
+            unknownHostException.addSuppressed(failures.get(i));
         }
 
         throw unknownHostException;
@@ -285,7 +289,7 @@ public class DnsOverHttps implements Dns {
 
     private List<InetAddress> readResponse(String hostname, Response response) throws Exception {
         if (response.cacheResponse() == null && response.protocol() != Protocol.HTTP_2) {
-            Platform.get().log(Platform.WARN, "Incorrect protocol: " + response.protocol(), null);
+            Platform.get().log("Incorrect protocol: " + response.protocol(), Platform.WARN, null);
         }
 
         try {
@@ -329,7 +333,8 @@ public class DnsOverHttps implements Dns {
     }
 
     static boolean isPrivateHost(String host) {
-        return PublicSuffixDatabase.get().getEffectiveTldPlusOne(host) == null;
+        // okhttp 4.x 为 Kotlin 伴生对象单例
+        return PublicSuffixDatabase.Companion.get().getEffectiveTldPlusOne(host) == null;
     }
 
     public static final class Builder {

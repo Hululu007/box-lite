@@ -1,0 +1,134 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <uses-feature
+       android:name="android.software.leanback"
+       android:required="false" />
+    <uses-feature
+       android:name="android.hardware.touchscreen"
+       android:required="false" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!--开机启动-->
+	<uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- 修复: 移除业务未用/库引入的敏感权限 -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" tools:node="remove" />
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" tools:node="remove" />
+    <uses-permission android:name="android.permission.GET_TASKS" tools:node="remove" />
+    <uses-permission android:name="android.permission.INSTALL_PACKAGES" tools:node="remove" />
+    <uses-permission android:name="android.permission.MOUNT_UNMOUNT_FILESYSTEMS" tools:node="remove" />
+    <application
+       android:name=".base.App"
+       android:allowBackup="false"
+       android:banner="@drawable/app_banner_b"
+       tools:replace="android:allowBackup"
+       android:configChanges="orientation|keyboardHidden|screenSize"
+       android:hardwareAccelerated="true"
+       android:icon="@drawable/app_icon"
+        android:roundIcon="@drawable/app_icon"
+       android:label="@string/app_name"
+       android:largeHeap="true"
+       android:networkSecurityConfig="@xml/network_security_config"
+       android:supportsRtl="true"
+       android:theme="@style/AppTheme.NoActionBar"
+       android:usesCleartextTraffic="true"
+       android:requestLegacyExternalStorage="true">
+        <activity
+           android:name=".ui.activity.HomeActivity"
+           android:screenOrientation="sensorLandscape">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <activity
+           android:name=".ui.activity.LivePlayActivity"
+           android:screenOrientation="sensorLandscape" ></activity>
+        <activity
+           android:name=".ui.activity.DetailActivity"
+           android:configChanges="orientation|screenSize"
+           android:screenOrientation="sensorLandscape" />
+        <activity
+           android:name=".ui.activity.PlayActivity"
+           android:configChanges="orientation|screenSize"
+           android:screenOrientation="sensorLandscape" />
+        <activity
+           android:name=".ui.activity.PushActivity"
+           android:screenOrientation="sensorLandscape" />
+        <activity
+           android:name=".ui.activity.SearchActivity"
+           android:screenOrientation="sensorLandscape" />
+        <activity
+           android:name=".ui.activity.FastSearchActivity"
+           android:screenOrientation="sensorLandscape" />
+        <activity
+           android:name=".ui.activity.DriveActivity"
+           android:screenOrientation="sensorLandscape" />
+        <activity
+           android:name=".ui.activity.SettingActivity"
+           android:screenOrientation="sensorLandscape" />
+        <activity
+           android:name=".ui.activity.HistoryActivity"
+           android:screenOrientation="sensorLandscape" />
+        <activity
+           android:name=".ui.activity.CollectActivity"
+           android:screenOrientation="sensorLandscape" />
+        <!-- v2.0.0（A2）：两个遗留 receiver 显式关闭导出（targetSdk 26 下带 intent-filter 默认导出，
+             任意 App 可广播触发搜索/拉起页面）。本机遥控/搜索链路走 ControlManager 同包显式
+             ComponentName 广播，不受影响。 -->
+        <receiver android:name=".receiver.SearchReceiver" android:exported="false">
+            <intent-filter>
+                <action android:name="android.content.movie.search.Action" />
+            </intent-filter>
+        </receiver>
+        <receiver android:name=".receiver.CustomWebReceiver" android:exported="false">
+            <intent-filter>
+                <action android:name="android.content.movie.custom.web.Action" />
+            </intent-filter>
+        </receiver>
+        <receiver
+		   android:name=".receiver.BootReceiver"
+		   android:enabled="true"
+		   android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED"/>
+                <action android:name="android.intent.action.QUICKBOOT_POWERON"/>
+            </intent-filter>
+        </receiver>
+        <provider
+           android:name="androidx.core.content.FileProvider"
+           android:authorities="${applicationId}.fileprovider"
+           android:exported="false"
+           android:grantUriPermissions="true">
+            <meta-data
+               android:name="android.support.FILE_PROVIDER_PATHS"
+               android:resource="@xml/file_paths" />
+        </provider>
+        <!-- Node.js 嵌入运行时宿主服务（独立 :nodejs 进程；由 NodeClient 显式 Intent 拉起） -->
+        <service
+            android:name=".service.NodeService"
+            android:process=":nodejs"
+            android:exported="false" />
+        <meta-data
+           android:name="design_width_in_dp"
+           android:value="1280" />
+        <meta-data
+           android:name="design_height_in_dp"
+           android:value="720" />
+        <meta-data
+           android:name="xwalk_enable_download_mode"
+           android:value="enable" />
+        <meta-data
+           android:name="xwalk_verify"
+           android:value="disable" />
+    </application>
+</manifest>
+
+

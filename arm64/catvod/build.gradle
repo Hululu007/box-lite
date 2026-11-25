@@ -1,0 +1,50 @@
+plugins {
+    id 'com.android.library'
+}
+
+android {
+    namespace 'com.github.catvod.crawler'
+
+    compileSdk 35
+
+    defaultConfig {
+        minSdk 21
+        targetSdk 26
+        consumerProguardFiles 'consumer-rules.pro'
+    }
+
+    compileOptions {
+        // catvod 使用 record / var（Java 17 语法），需要 17 源级别；
+        // 库模块自身也需开启脱糖，否则 D8 无法为 record 生成 global synthetics
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+        coreLibraryDesugaringEnabled true
+    }
+    lint {
+        checkReleaseBuilds false
+        abortOnError false
+    }
+}
+
+dependencies {
+    // record 脱糖（与 :app 一致）
+    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.2'
+    // 与 FongMi catvod 对齐：okhttp 4.x 对 3.x 基本二进制兼容（okgo 仍可用）
+    api 'androidx.annotation:annotation:1.3.0'
+    api 'org.brotli:dec:0.1.2'
+    api 'com.squareup.okhttp3:okhttp:4.12.0'
+    api 'com.squareup.okhttp3:logging-interceptor:4.12.0'
+    // compileOnly：app 源码树内含 okhttp3.dnsoverhttps 本地定制实现（mutable 版，支持 setUrl 动态切换/可空 url），
+    // catvod 仅编译期需要该类；若声明为 api 会把 4.12.0 artifact 打进最终 dex，与本地实现形成重复类（mergeDex 失败）
+    compileOnly 'com.squareup.okhttp3:okhttp-dnsoverhttps:4.12.0'
+    api 'com.squareup.okio:okio:3.6.0'
+    api 'com.google.code.gson:gson:2.15.0'
+    api 'com.google.guava:guava:32.1.3-android'
+    api 'com.googlecode.juniversalchardet:juniversalchardet:1.0.3'
+    api 'com.orhanobut:logger:2.2.0'
+    api 'androidx.preference:preference:1.2.1'
+    api 'com.github.thegrizzlylabs:sardine-android:0.9'
+    api 'com.hierynomus:smbj:0.15.0'
+    api 'androidx.startup:startup-runtime:1.1.1'
+    api 'com.google.zxing:core:3.5.4'
+}

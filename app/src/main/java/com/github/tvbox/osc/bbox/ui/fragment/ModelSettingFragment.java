@@ -786,6 +786,8 @@ public class ModelSettingFragment extends BaseLazyFragment {
         if (Hawk.get(HawkConfig.IS_IGNORE_VERSION, false)) {LOG.i("已忽略更新");return;}
         // LOG.i("checkHasUpdate");
         String checkUrl = URL.GITHUB_VERSION_PATH;
+        // v2.0.0（B4）：纯净版禁用更新（地址为空）时不发空请求、不弹“订阅地址为空”的误导提示
+        if (checkUrl == null || checkUrl.trim().isEmpty()) return;
         StoreApiConfig.get().doGet(checkUrl, new StoreApiConfig.StoreApiConfigCallback() {
             @Override
             public void success(String json) {
@@ -820,6 +822,8 @@ public class ModelSettingFragment extends BaseLazyFragment {
     private void checkUpdate () {
         Hawk.put(HawkConfig.IS_IGNORE_VERSION, false);
         String checkUrl = URL.GITHUB_VERSION_PATH;
+        // v2.0.0（B4）：纯净版禁用更新（地址为空）时直接返回
+        if (checkUrl == null || checkUrl.trim().isEmpty()) return;
         XUpdate.newBuild(mContext)
                 .updateUrl(checkUrl)
                 .updateChecker(new CustomUpdateChecker(getActivity()))

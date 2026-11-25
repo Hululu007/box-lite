@@ -1,29 +1,28 @@
 apply plugin: 'com.android.application'
+apply plugin: 'com.chaquo.python'
 
 android {
-    // 保持低版本：Android 4.1 (API 16) 起可用，目标是 4.4+ / 老盒子
-    compileSdkVersion 30
-    // 构建工具固定 30.0.1（30 系）：AGP 4.2.2 默认要 30.0.3，但国内镜像普遍缺 30.0.3 包
-    // （腾讯/阿里/华为均已下架，仅 dl.google.com 有）。30.0.1 与 compileSdk 30 完全兼容，
-    // 显式指定可保证镜像受限环境也能复现构建。
-    buildToolsVersion "30.0.1"
+    namespace 'com.github.tvbox.osc.bbox'
+
+    // v1.1.0 升级：compileSdk 30 → 35（AGP 8.13 / minSdk 21 / 安卓 5.0 起步）
+    compileSdk 35
 
     defaultConfig {
-        // TODO(发行版): 修改为你的 applicationId / 名称 / 版本号，见 docs/DISTRIBUTION.md
         applicationId 'tv.of.eu.box.daily'
-        minSdkVersion 16
-        targetSdkVersion 26
-        versionCode 26
-        versionName '1.0.25'
+        minSdk 21
+        targetSdk 26
+        versionCode 41
+        versionName '2.0.1'
         multiDexEnabled true
         javaCompileOptions {
             annotationProcessorOptions {
                 arguments = ["room.schemaLocation": "$projectDir/schemas".toString()]
             }
         }
-        // P1：接入 m3u8 原生过滤模块（app/src/main/jni → libm3u8native.so）。
-        // ABI 与 player/quickjs 预编译 .so 保持一致（仅 armeabi-v7a）。
-        // 构建前置：需安装 NDK + CMake，如：sdkmanager "ndk;21.4.7075529" "cmake;3.10.2"
+        // P1：m3u8 原生过滤模块（app/src/main/jni → libm3u8native.so）
+        ndk {
+            abiFilters 'armeabi-v7a'
+        }
         externalNativeBuild {
             cmake {
                 abiFilters 'armeabi-v7a'
@@ -38,8 +37,7 @@ android {
     }
 
     signingConfigs {
-        // 安全发行版：keystore 与密码严禁提交仓库。
-        // 在 local.properties 里配置你自己的签名，见 docs/DISTRIBUTION.md
+        // 签名配置在 local.properties（严禁提交仓库）
         release {
             def sp = new Properties()
             def lf = rootProject.file('local.properties')
@@ -54,15 +52,19 @@ android {
     applicationVariants.all { variant ->
         variant.outputs.all { output ->
             if (variant.buildType.name == 'release') {
-                output.outputFileName = "box-v${defaultConfig.versionName}.apk"
-                output.getPackageApplication().outputDirectory =
-                        new File(project.rootDir.absolutePath + "/release")
+                output.outputFileName = "box-v${defaultConfig.versionName}-arm32.apk"
             }
         }
     }
 
-    packagingOptions {
-        exclude 'META-INF/DEPENDENCIES'
+    buildFeatures {
+        buildConfig true
+    }
+
+    packaging {
+        resources {
+            excludes += 'META-INF/DEPENDENCIES'
+        }
     }
 
     buildTypes {
@@ -76,10 +78,8 @@ android {
             // 关闭 R8 混淆/裁剪：proguard-rules.pro 为空，R8 会删掉 Room/Gson/quickjs 等反射用类，
             // 造成 release 启动即崩（debug 正常）。为保证可运行，release 暂不开启 minify。
             minifyEnabled false
-            // 仅当本地配置了签名时才签名，否则输出未签名包（不可直接安装）
             signingConfig signingConfigs.release
-            // 原生库(p2p/quickjs/ijk/player)仅预编译了 armeabi-v7a，必须限定该 ABI，
-            // 否则 arm64/x86 设备缺 .so 启动即崩（arm64 会以 32 位兼容运行 armeabi-v7a）
+            // 原生库(p2p/quickjs/ijk/player)仅预编译了 armeabi-v7a，必须限定该 ABI
             ndk { abiFilters 'armeabi-v7a' }
         }
     }
@@ -92,23 +92,55 @@ android {
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_1_8
         targetCompatibility JavaVersion.VERSION_1_8
+        // catvod 用 Java 17 record，D8 对 minSdk 21 需 core library desugaring 才能生成 global synthetics
+        coreLibraryDesugaringEnabled true
     }
 
-    lintOptions {
+    lint {
         checkReleaseBuilds false
         abortOnError false
     }
+}
 
-    dexOptions {
-        javaMaxHeapSize "4g"
-        additionalParameters += '--multi-dex'
-        additionalParameters += '--set-max-idx-number=48000'
-        additionalParameters += '--minimal-main-dex'
+// Python 3.10 嵌入运行时（chaquopy 16.1，双架构 armeabi-v7a/arm64-v8a 均支持）
+chaquopy {
+    defaultConfig {
+        version = "3.10"
+        // 构建期 Python（仅用于跑 pip，不上设备）
+        // 注意：此路径为维护者机器路径，自建环境请改成本机 Python 3.8+ 解释器路径
+        buildPython "C:/Users/Administrator/.local/share/TeleAgent/runtimes/python/python.exe"
+        pip {
+            // FongMi 运行时核心集。C 扩展（lxml/ujson/pycryptodome/cryptography）只有
+            // android_24 wheel，故用 --platform 放行；纯 Python 包走清华镜像
+            install "lxml==5.3.0"
+            install "ujson==5.11.0"
+            install "pycryptodome==3.21.0"
+            install "cryptography==42.0.8"
+            install "pyquery==2.1.0"
+            install "requests==2.34.2"
+            install "beautifulsoup4==4.15.0"
+            install "yapf==0.43.0"
+            install "pywasm==1.0.8"
+            install "cachetools==7.2.1"
+            options("--index-url", "https://pypi.tuna.tsinghua.edu.cn/simple",
+                    "--extra-index-url", "https://pypi.org/simple",
+                    "--extra-index-url", "https://chaquo.com/pypi-13.1",
+                    "--platform", "android_24_armeabi_v7a",
+                    "--disable-pip-version-check")
+        }
+    }
+    sourceSets {
+        main {
+            srcDir "src/main/python"
+        }
     }
 }
 
 dependencies {
     api fileTree(dir: "libs", include: ["*.jar", "*.aar"])
+
+    // Java 17 record 脱糖（配合 catvod）
+    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.2'
 
     implementation 'com.github.alidili:FlowLayout:v1.5'
     implementation 'org.nanohttpd:nanohttpd:2.3.1'
@@ -118,14 +150,14 @@ dependencies {
     implementation 'androidx.lifecycle:lifecycle-extensions:2.2.0'
     implementation 'androidx.recyclerview:recyclerview:1.2.1'
 
-    implementation 'com.squareup.okhttp3:okhttp:3.12.11'
+    implementation 'com.squareup.okhttp3:okhttp:4.12.0'
     annotationProcessor 'androidx.room:room-compiler:2.3.0'
     implementation 'androidx.room:room-runtime:2.3.0'
     implementation 'androidx.multidex:multidex:2.0.1'
-    implementation 'com.squareup.okio:okio:2.8.0'
+    implementation 'com.squareup.okio:okio:3.6.0'
     implementation 'com.github.CymChad:BaseRecyclerViewAdapterHelper:2.9.45-androidx'
     implementation 'com.kingja.loadsir:loadsir:1.3.8'
-    implementation 'com.google.code.gson:gson:2.8.7'
+    implementation 'com.google.code.gson:gson:2.15.0'
     implementation 'com.squareup.picasso:picasso:2.71828'
     implementation 'me.jessyan:autosize:1.2.1'
     implementation('com.thoughtworks.xstream:xstream:1.4.15') { exclude group: 'xmlpull', module: 'xmlpull' }
@@ -134,6 +166,9 @@ dependencies {
 
     implementation project(":player")
     implementation project(":quickjs")
+    implementation project(":catvod")
+    implementation project(":chaquo")
+    implementation project(":nodejs")
 
     implementation 'com.lzy.net:okgo:3.0.4'
     implementation 'com.owen:tv-recyclerview:3.0.0'

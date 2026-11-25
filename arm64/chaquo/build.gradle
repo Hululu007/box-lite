@@ -1,0 +1,36 @@
+plugins {
+    id 'com.android.library'
+}
+
+android {
+    namespace 'com.fongmi.chaquo'
+
+    compileSdk 35
+
+    defaultConfig {
+        consumerProguardFiles 'consumer-rules.pro'
+        minSdk 21
+        targetSdk 26
+    }
+
+    compileOptions {
+        // 与 catvod 保持一致（chaquo 代码需引用 catvod 类型），并开启脱糖
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+        coreLibraryDesugaringEnabled true
+    }
+    lint {
+        checkReleaseBuilds false
+        abortOnError false
+    }
+}
+
+dependencies {
+    // 与 :app/:catvod 保持一致的脱糖库
+    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.2'
+    // chaquopy Java 库（Python 嵌入运行时）：chaquopy 插件会给 :app 自动注入同名 jar 打包，
+    // 这里必须 compileOnly，否则 dex 阶段重复类冲突
+    compileOnly 'com.chaquo.python.runtime:chaquopy_java:15.0.1'
+    // api 而非 compileOnly：需要 catvod 及其 api 依赖（gson/annotation/okhttp）
+    api project(':catvod')
+}

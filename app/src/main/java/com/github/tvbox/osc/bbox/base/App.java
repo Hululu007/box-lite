@@ -3,6 +3,7 @@ package com.github.tvbox.osc.bbox.base;
 import android.app.Activity;
 import android.widget.Toast;
 import androidx.multidex.MultiDexApplication;
+import com.github.catvod.Runtime;
 import com.github.catvod.crawler.JsLoader;
 import com.github.tvbox.osc.bbox.bean.VodInfo;
 import com.github.tvbox.osc.bbox.callback.EmptyCallback;
@@ -46,6 +47,9 @@ public class App extends MultiDexApplication {
         super.onCreate();
         com.github.tvbox.osc.bbox.util.CrashHandler.install(this);
         instance = this;
+        // 内嵌 Python(catvod)/NodeJS 运行时上下文：.py 源与部分 jar 内部依赖它
+        Runtime.set(this);
+        Runtime.setToast(text -> Toast.makeText(this, text, Toast.LENGTH_SHORT).show());
         initParams();
         // OKGo
         OkGoHelper.init(); // 台标获取
@@ -66,26 +70,8 @@ public class App extends MultiDexApplication {
         PlayerHelper.init();
         QuickJSLoader.init();
         FileUtils.cleanPlayerCache();
-        // initXUpdate(); // 发行版禁用自动更新模块
-
-        // davTest();
+        // initXUpdate(); // 发行版禁用自动更新模块（纯净版无更新回连）
     }
-
-    // private void davTest () {
-    //     String davUrl = "https://www.bunnyabc.eu.org:15245/dav/";
-    //     String uname = "tvbox_dav";
-    //     String password = "123456";
-    //
-    //     OkHttpSardine client = new OkHttpSardine();
-    //     client.setCredentials(uname, password);
-    //
-    //     try {
-    //         InputStream inputStream = client.get("https://www.bunnyabc.eu.org:15245/dav/test1.txt");
-    //
-    //     } catch (IOException e) {
-    //         throw new RuntimeException(e);
-    //     }
-    // }
 
     private void initXUpdate() {
         XUpdate.get()
@@ -120,7 +106,11 @@ public class App extends MultiDexApplication {
 
     private void initParams() {
         // Hawk
-        Hawk.init(this).build();
+        // v1.1.8：Hawk 2.0.1 原版 Converter 的 toList/toMap/toSet 用 new TypeToken<List<T>>(){}
+        // 匿名类携带类型变量，gson 2.10.1 起直接抛 IllegalArgumentException，导致所有
+        // Map/List 类键“写得进、读出永远空默认值”（STORE_API_MAP/API_MAP/*_HISTORY 全中招）。
+        // 替换为用 TypeToken.getParameterized 的 FixedHawkConverter，序列化格式不变、新旧数据互读。
+        Hawk.init(this).setConverter(new com.orhanobut.hawk.FixedHawkConverter()).build();
 
         putDefault(HawkConfig.DEBUG_OPEN, false);
         putDefault(HawkConfig.PLAY_TYPE, 1);

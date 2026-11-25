@@ -1,3 +1,86 @@
+# v2.0.1 (2026-11-25)
+
+**兼容性修复：jar MD5 强校验改为知情提示**（真机反馈「MD5 校验失败，不加载 jar」）。产物：box-v2.0.1-arm32.apk（versionCode 41）/ box-v2.0.1-arm64.apk（versionCode 39）。
+
+- **根因**：v1.0.23 B-07 的「下载完成 MD5 不匹配即删除拒载」与 TVBox 生态语义冲突——大量配置把 `;md5;` 当**缓存刷新标记**而非真实 MD5（源方更新 jar 不改 md5，或干脆填随机串），这类源被强校验直接打死。且 md5 与 jar 同通道传输，真实 MITM 可同时篡改两者，强校验对防投毒无实质增益
+- **修复**：配置阶段（`ApiConfig.loadJar`）与运行期（catvod `JarLoader`）两处下载后校验均改为「知情提示后照常加载」——不匹配记日志（含 expected/actual）+ Toast 提示，不再删除文件、不再拒绝加载；**缓存命中判断仍用 md5**（源方更新 jar 后仍触发重新下载，缓存新鲜度语义不变）；下载内容真损坏时 DexClassLoader 自然失败，下次因 md5 不匹配自动重下，自愈
+- 顺手修复 `img+` 形式 jar 提取空数据时缺 `return` 的 NPE（convertResponse 内对 null 执行 write）
+- 安全取舍说明：放宽后 MITM 理论上可投毒 jar，但同通道下其本可连配置 md5 一起改——原强校验并未提供可利用的防护；防投毒的实质手段是开启 `SSL_STRICT_VERIFY`
+
+# v2.0.0 (2026-11-25)
+
+**大版本：v1.1.8 全量代码安全审计修复落地 + NodeJS 配置源接线完成 + 双包可分辨**。
+产物：box-v2.0.0-arm32.apk（versionCode 40）/ box-v2.0.0-arm64.apk（versionCode 38），双包验签通过。
+
+- **A1 · NodeJS 配置源接线（重点改造）**：深挖发现 v1.1.x 的 `node:` 源从未真正工作——`NodeClient.recover()` 在无 bundle 时直接抛错，`getNodeCSP` 静默返回 SpiderNull（45s ANR 为静态分析误判）。v2.0.0 四层修复：
+  - **接线**：`ApiConfig.loadConfig` 新增 Node 分支（`index.js.md5` 结尾地址识别），bundle 下载与 Node 启动（最长 45s）全部在后台线程完成，成功后回主线程走原解析链；不走 JSON 缓存捷径（缓存引用 `node:` 路由，必须先有运行中的服务）
+  - **主线程防护**：`getNodeCSP` 在主线程调用时直接返回 SpiderNull（`spider.init` 是同步 HTTP，主线程调用会 ANR）；业务调用点已核实全在后台线程，主线程仅 WebView 嗅探兜底路径，播放不受影响
+  - **同源复用**：同一 node 源复用已初始化的 Spider，不再每次 POST `/init`；服务意外死亡由 `NodeClient.recover` 自动重启并重放
+  - **session 失效复位**：新增 `resetNodeSpiderCache()`，Node bundle 重载（session 递增）后清空旧 Spider 缓存，避免旧 Spider 持续 `checkSession` 异常导致 node 源全部失效
+- **A2 · receiver 收敛**：`SearchReceiver` / `CustomWebReceiver` 显式 `exported=false`（本机遥控走同包显式广播不受影响），`onReceive` 参数判空消除 NPE 广播 DoS
+- **A3 · 本地服务令牌白名单补漏**：`needsToken()` 增补 `/proxy` 与 `/dns-query`，封死无令牌局域网代理滥用；本机（127.0.0.1）放行、遥控页 XHR 自带 `X-TV-Token`，播放/投屏无感
+- **A4a · 订阅客户端尊重 TLS 开关**：`StoreApiConfig.storeClient` 读取 `SSL_STRICT_VERIFY`（开启则系统默认校验；默认宽 TLS 不变以保广泛兼容）
+- **B1 · hosts 即时生效**：`CustomDns.lookup` 每次读 `ApiConfig.getMyHost()` 活引用（原静态快照永不刷新，hosts 功能形同虚设）
+- **B2 · DoH 超时兜底**：`dohClient` 加 `callTimeout(5s)`；本地定制 `DnsOverHttps` 的 `latch.await` 带 5s 超时，超时/失败自动回退系统 DNS（v1.1.6 只修了订阅侧，此轮补齐主链路）
+- **B3 · 线路判重**：订阅线路改 name+url 双条件判重（同名线路不再覆盖/重复）
+- **B4 · 更新检查**：纯净版空更新地址直接 return，不再弹订阅语境误导提示
+- **B5 · 诊断日志轮转**：`store_debug.log` 超 256KB 截断重写
+- **双包可分辨**：桌面标签改「星辰影音32」「星辰影音64」，关于页显示版本号 + 32/64 位标识（按 `nativeLibraryDir` 判架构），并新增 [FongMi/TV](https://github.com/FongMi) 打包分发出处链接（弹窗顶部固定显示版本号，正文精简避免 TV 弹窗截断）
+- 本版基于 v1.1.8 全量代码安全审计（审计结论：后门 0 发现）执行修复；搜索联想上送（atianqi）与默认加速代理域两项生态惯例问题保留未动，待维护者决策
+
+# v1.1.8 (2026-11-25)
+
+**根因终极修复：Hawk 2.0.1 × Gson 2.15.0 不兼容**——v1.1.0 起多源订阅系列故障的真正源头。
+
+- **机理**：Hawk 2.0.1 的 `HawkConverter` 用匿名 `TypeToken<List<T>>{}` 携带类型变量，Gson 2.10.1 起禁止此类 TypeToken → `Hawk.get` 反序列化抛异常被静默吞掉返回空值。表现：所有 Map/List 类 Hawk 键「写得进、读出永远空」（STORE_API_MAP / API_MAP / 各类历史记录全部中招），String/Integer 键不受影响。v1.1.0 引入 FongMi catvod（gson 2.8.7→2.15.0）即触发，1.0.26 因此正常
+- **修复**：新增 `FixedHawkConverter`（`TypeToken.getParameterized(HashMap.class, keyClazz, valueClazz)`，两版 gson 均合法），`App.initParams` 接入。序列化格式不变，**与旧数据互读**——v1.1.x 期间「写进读不出」的订阅地址、线路历史修复后直接复活，无需重新输入
+- 定位方法：解包 aar 在 JVM 复现 Hawk put/get 链路、双 gson 版本对拍，实锤抛 `IllegalArgumentException: TypeToken type argument must not contain a type variable`
+
+# v1.1.7 (2026-11-25)
+
+- 日志实锤订阅拿到的是**空 URL**（三次 GET 后无地址）：纯净版 `DEFAULT_STORE_API_URL=""`，`STORE_API_MAP` 取不到地址时回退空串，okhttp4 对 `url("")` 同步抛异常 → 请求未发起、回调未执行、无任何 Toast，完美解释 v1.1.4~1.1.6「完全无反应」
+- `doGet` 增加空 URL 保护（直接回主线程弹明确提示，不发起请求）；订阅前把 name / map 键集 / storeUrl 全量写入诊断日志
+
+# v1.1.6 (2026-11-25)
+
+- 订阅改用专用干净 client：不走 DoH（系统 DNS）+ `callTimeout(30s)` 强制回调（排查 DoH 无超时挂死）
+- **全链路诊断持久化**：订阅发起/HTTP code/body 长度/异常链+栈 append 写入 `Android/data/<包名>/files/store_debug.log`（TV 文件管理器可直读）；失败 Toast 提示查看该文件
+
+# v1.1.5 (2026-11-25)
+
+- 修复 v1.1.4 引入的回调线程 bug：okhttp4 原生 `enqueue` 回调落在无 Looper 线程，`Toast.makeText` 抛 `Can't toast on a thread...` → 回调链静默中断（无 Toast、Hawk 不入库）。body 在 okhttp 线程读完，结果 `MAIN.post` 切主线程再回调，完全复刻 OkGo 主线程回调语义
+
+# v1.1.4 (2026-11-25)
+
+- 多源订阅请求层从 OkGo 3.0.4 迁移到 okhttp4 原生异步（复用 v1.1.3 已配 COMPATIBLE_TLS 的 client），彻底绕开 OkGo 兼容层；失败 Toast 附真实异常名便于分流。注：全局回退 okhttp3 已评估否决（catvod 深度依赖 okhttp4 专属 API）
+
+# v1.1.3 (2026-11-25)
+
+- 主因排查为真机 TLS 握手：三个共享 client 加 `connectionSpecs(COMPATIBLE_TLS, CLEARTEXT)` 宽套件（老盒子/老 TLS 服务器兼容）；订阅失败 Toast 附真实异常 + logcat 标签
+
+# v1.1.2 (2026-11-25)
+
+- 修复 node 源真机全部加载失败：`libnode.so` 依赖 libc++_shared，chaquopy 内置那份在链接器搜索路径外 → jniLibs 补 NDK 27 的 `libc++_shared.so`（v7a/arm64）；符号级验证 NDK27 全覆盖（NDK21 缺 48 个 C++ 符号不可用）
+
+# v1.1.1 (2026-11-24)
+
+- **NodeJS 模块全链路完成**：`:nodejs` 模块（AGP 8.5.2 / CMake 3.22.1 + NDK 27 / 16KB 对齐）；RuntimeModule 增加 `EMBEDDED_NODEJS` 嵌入分支（require/isRestartRequired/load/recordLoaded 绕过外部运行时 APK 机制）；宿主 `NodeService` 直读 assets bootstrap；`ApiConfig` 接线（`node:` 源 CSP 分支 / 本地代理 / 清理）
+- **API<24 门控**：源列表解析处剔除 `.py` / `node:` 源（低版本设备不可用），getCSP 级兜底 SpiderNull
+- **64 位工程 bl27-64 建成**：独立包名 `tv.of.eu.box.daily.arm64`（同机可共存）、arm64-v8a 全套 abiFilters、本地服务端口 9978→19978、chaquopy arm64 轮子预下载机制
+- 产物：box-v1.1.1-arm32.apk（versionCode 31）/ box-v1.1.1-arm64.apk（versionCode 29）
+
+# v1.1.0 (2026-11-24)
+
+**大升级：现代化工具链 + FongMi 三运行时引入**。产物 box-v1.1.0-arm32.apk（versionCode 30，46.27MB）。
+
+- **工具链升级**：compileSdk 30→35、minSdk 16→21（Android 5.0 起）、AGP 4.x→8.5.2、JDK 8→21（源级 1.8 + core library desugaring）、okhttp3→okhttp 4.12 + okio 3.6、gson→2.15.0
+- **三大运行时模块引入**（源自 FongMi/TV catvod 系列）：
+  - `:chaquo` Python 3.10 嵌入运行时（chaquopy 15.0.1，pip 含 lxml/ujson/pycryptodome/cryptography/pywasm 等），`.py` 源接入源加载与直播
+  - `:nodejs` NodeJS 运行时模块（本轮起步）
+  - `:catvod` okhttp4 系支撑库
+- 冲突处置：app 本地定制版 `okhttp3.dnsoverhttps`（支持运行期切换 DoH）与 catvod 同名 artifact 冲突，后者改 `compileOnly`
+- 30 条源数量限制移除；ijkplayer / 迅雷 SDK / QuickJS 均保留在包内
+
 # v1.0.23 (2026-11-06)
 
 **安全加固版**：完整修复静态审计中 B-01 ~ B-10 共 10 项风险，功能与交互尽量保持不变。

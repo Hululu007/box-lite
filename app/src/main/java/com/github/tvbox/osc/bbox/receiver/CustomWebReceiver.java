@@ -29,7 +29,9 @@ public class CustomWebReceiver extends BroadcastReceiver {
     public void onReceive(Context context, Intent intent) {
         if (action.equals(intent.getAction()) && intent.getExtras() != null) {
             Object refreshObj = null;
+            // v2.0.0（A2）：action 键判空——此前缺键时 action.equals(...) 直接 NPE 崩溃（广播 DoS）
             String action = intent.getExtras().getString("action");
+            if (action == null) return;
             if (action.equals(REFRESH_PARSE)) {
                 /*String name = intent.getExtras().getString("name");
                 String url = intent.getExtras().getString("url");*/

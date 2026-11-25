@@ -238,7 +238,12 @@ public class RemoteServer extends NanoHTTPD {
     private static boolean needsToken(String uri) {
         return "/action".equals(uri) || "/upload".equals(uri) || "/newFolder".equals(uri)
                 || "/delFolder".equals(uri) || "/delFile".equals(uri) || uri.startsWith("/file/")
-                || uri.startsWith("/push/");
+                || uri.startsWith("/push/")
+                // v2.0.0（A3）：/proxy 凭参数即可驱动 spider 代理逻辑（SSRF 面），/dns-query 可被
+                // 局域网免授权白嫖 DNS 转发，一并纳入令牌校验。本机 127.0.0.1/本机网卡地址
+                // （isLocalRequest 放行）不受影响：播放器拉流、clan:// 链路全部走本机回环；
+                // 遥控页 XHR 统一携带 X-TV-Token（script.js），投屏/推送链路无感。
+                || "/proxy".equals(uri) || "/dns-query".equals(uri);
     }
 
     /** 输出首页，并按是否已授权决定是否注入访问令牌。 */

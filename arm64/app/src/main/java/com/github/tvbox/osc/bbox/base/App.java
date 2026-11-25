@@ -1,0 +1,247 @@
+package com.github.tvbox.osc.bbox.base;
+
+import android.app.Activity;
+import android.widget.Toast;
+import androidx.multidex.MultiDexApplication;
+import com.github.catvod.Runtime;
+import com.github.catvod.crawler.JsLoader;
+import com.github.tvbox.osc.bbox.bean.VodInfo;
+import com.github.tvbox.osc.bbox.callback.EmptyCallback;
+import com.github.tvbox.osc.bbox.callback.LoadingCallback;
+import com.github.tvbox.osc.bbox.constant.URL;
+import com.github.tvbox.osc.bbox.data.AppDataManager;
+import com.github.tvbox.osc.bbox.server.ControlManager;
+import com.github.tvbox.osc.bbox.util.*;
+import com.kingja.loadsir.core.LoadSir;
+import com.orhanobut.hawk.Hawk;
+import com.p2p.P2PClass;
+import com.whl.quickjs.android.QuickJSLoader;
+import com.xuexiang.xupdate.XUpdate;
+import com.xuexiang.xupdate.entity.UpdateError;
+import com.xuexiang.xupdate.listener.OnUpdateFailureListener;
+import com.xuexiang.xupdate.utils.UpdateUtils;
+import me.jessyan.autosize.AutoSizeConfig;
+import me.jessyan.autosize.unit.Subunits;
+
+import java.util.ArrayList;
+import java.util.List;
+
+import static com.xuexiang.xupdate.entity.UpdateError.ERROR.CHECK_NO_NEW_VERSION;
+
+/**
+ * @author pj567
+ * @date :2020/12/17
+ * @description:
+ */
+public class App extends MultiDexApplication {
+    // ^(?!.*(HWComposer|TrafficController|lowmemorykiller)).*$
+
+    private static App instance;
+
+    private static P2PClass p;
+    public static String burl;
+    private static String dashData;
+
+    @Override
+    public void onCreate() {
+        super.onCreate();
+        com.github.tvbox.osc.bbox.util.CrashHandler.install(this);
+        instance = this;
+        // 内嵌 Python(catvod)/NodeJS 运行时上下文：.py 源与部分 jar 内部依赖它
+        Runtime.set(this);
+        Runtime.setToast(text -> Toast.makeText(this, text, Toast.LENGTH_SHORT).show());
+        initParams();
+        // OKGo
+        OkGoHelper.init(); // 台标获取
+        EpgUtil.init();
+        // 初始化Web服务器
+        ControlManager.init(this);
+        LOG.i("Web服务器初始化完成！");
+        // 初始化数据库
+        AppDataManager.init();
+        LoadSir.beginBuilder()
+                .addCallback(new EmptyCallback())
+                .addCallback(new LoadingCallback())
+                .commit();
+        AutoSizeConfig.getInstance().setCustomFragment(true).getUnitsManager()
+                .setSupportDP(false)
+                .setSupportSP(false)
+                .setSupportSubunits(Subunits.MM);
+        PlayerHelper.init();
+        QuickJSLoader.init();
+        FileUtils.cleanPlayerCache();
+        // initXUpdate(); // 发行版禁用自动更新模块（纯净版无更新回连）
+    }
+
+    private void initXUpdate() {
+        XUpdate.get()
+                .debug(true)
+                // 默认设置只在wifi下检查版本更新
+                .isWifiOnly(false)
+                // 默认设置使用get请求检查版本
+                .isGet(true)
+                // 默认设置非自动模式，可根据具体使用配置
+                .isAutoMode(false)
+                // 设置默认公共请求参数
+                .param("versionCode", UpdateUtils.getVersionCode(this))
+                .param("appKey", getPackageName())
+                // 设置版本更新出错的监听
+                .setOnUpdateFailureListener(new OnUpdateFailureListener() {
+                    @Override
+                    public void onFailure(UpdateError error) {
+                        error.printStackTrace();
+                        // 对不同错误进行处理
+                        if (error.getCode() != CHECK_NO_NEW_VERSION) {
+                            Toast.makeText(getApplicationContext(), error.toString(), Toast.LENGTH_SHORT).show();
+                        }
+                    }
+                })
+                // 设置是否支持静默安装，默认是true
+                .supportSilentInstall(false)
+                // 这个必须设置！实现网络请求功能。
+                // .setIUpdateHttpService(new OkGoUpdateHttpService())
+                // 这个必须初始化
+                .init(this);
+    }
+
+    private void initParams() {
+        // Hawk
+        // v1.1.8：Hawk 2.0.1 原版 Converter 的 toList/toMap/toSet 用 new TypeToken<List<T>>(){}
+        // 匿名类携带类型变量，gson 2.10.1 起直接抛 IllegalArgumentException，导致所有
+        // Map/List 类键“写得进、读出永远空默认值”（STORE_API_MAP/API_MAP/*_HISTORY 全中招）。
+        // 替换为用 TypeToken.getParameterized 的 FixedHawkConverter，序列化格式不变、新旧数据互读。
+        Hawk.init(this).setConverter(new com.orhanobut.hawk.FixedHawkConverter()).build();
+
+        putDefault(HawkConfig.DEBUG_OPEN, false);
+        putDefault(HawkConfig.PLAY_TYPE, 1);
+        putDefault(HawkConfig.HOME_REC, 1);
+        // 默认渲染方式：推荐手机使用0-texture，电视1-surface
+        putDefault(HawkConfig.PLAY_RENDER, 1);
+        putDefault(HawkConfig.IJK_CODEC, "硬解码");
+        putDefault(HawkConfig.HOME_REC_STYLE, false);// 首页多行
+
+        putDefault(HawkConfig.PROXY_URL, URL.DOMAIN_NAME_PROXY);
+        // 默认换台反转
+        putDefault(HawkConfig.LIVE_CHANNEL_REVERSE, true);
+        // 默认显示时间
+        putDefault(HawkConfig.LIVE_SHOW_TIME, true);
+        putDefaultApis();
+
+        /*
+        if (Hawk.contains(HawkConfig.AVAILABLE_PROXY_URL)) {
+            Checker.getInstance().checkProxy(isAvailable -> {
+                if (!isAvailable) {
+                    LOG.i("代理链接失效，删除缓存");
+                    Hawk.delete(HawkConfig.AVAILABLE_PROXY_URL);
+                    Checker.getInstance().getAllProxyUrls(url -> {
+                        if (!Hawk.contains(HawkConfig.AVAILABLE_PROXY_URL)) {
+                            LOG.i("更新代理链接" + url + "写入缓存");
+                            Hawk.put(HawkConfig.AVAILABLE_PROXY_URL, url);
+                            putDefaultApis(url);
+                        }
+                    });
+                }
+                else {
+                    LOG.i("代理链接依旧可用");
+                }
+            }, Hawk.get(HawkConfig.AVAILABLE_PROXY_URL, ""));
+        }
+        else {
+            Checker.getInstance().getAllProxyUrls(url -> {
+                if (!Hawk.contains(HawkConfig.AVAILABLE_PROXY_URL)) {
+                    LOG.i("将代理链接" + url + "写入缓存");
+                    Hawk.put(HawkConfig.AVAILABLE_PROXY_URL, url);
+                    putDefaultApis(url);
+                }
+            });
+        }
+        */
+    }
+
+    private void putDefaultApis() {
+        String url = URL.DOMAIN_NAME_PROXY;
+
+        // 默认加速历史记录
+        List<String> proxyUrlHistory = Hawk.get(HawkConfig.PROXY_URL_HISTORY, new ArrayList<>());
+        proxyUrlHistory.add(url);
+        proxyUrlHistory.add("https://ghproxy.net/");
+        proxyUrlHistory.add("https://mirror.ghproxy.com/");
+        // 纯净版: 不内置默认仓库地址
+        String defaultStoreApi = "";
+
+        // 纯净版: 不预置默认 EPG(节目单由用户自行配置)
+        List<String> epgHistory = Hawk.get(HawkConfig.EPG_HISTORY, new ArrayList<>());
+        String defaultEpgUrl = "";
+
+
+        // 不添加默认线路
+        // 默认线路地址
+        // String defaultApiName = "自备份线路";
+        // String defaultApi = url + URL.DEFAULT_API_URL;
+        // Map<String, String> defaultApiMap = Hawk.get(HawkConfig.API_MAP, new HashMap<>());
+        // defaultApiMap.put(defaultApiName, defaultApi);
+        // List<String> defaultApiHistory = Hawk.get(HawkConfig.API_NAME_HISTORY, new ArrayList<>());
+        // defaultApiHistory.add(defaultApiName);
+        // putDefault(HawkConfig.API_URL, defaultApi);
+        // putDefault(HawkConfig.API_NAME, defaultApiName);
+        // putDefault(HawkConfig.API_NAME_HISTORY, defaultApiHistory);
+        // putDefault(HawkConfig.API_MAP, defaultApiMap);
+        // 添加默认直播源
+        putDefault(HawkConfig.LIVE_URL, URL.DEFAULT_LIVE_URL);
+
+        putDefault(HawkConfig.DEFAULT_STORE_API, defaultStoreApi);
+        putDefault(HawkConfig.PROXY_URL_HISTORY, proxyUrlHistory);
+        putDefault(HawkConfig.EPG_URL, defaultEpgUrl);
+        putDefault(HawkConfig.EPG_HISTORY, epgHistory);
+        putDefault(HawkConfig.LIVE_SHOW_NET_SPEED, true);
+        putDefault(HawkConfig.IS_GLOBAL_SCALE, true);
+    }
+
+    private void putDefault(String key, Object value) {
+        if (!Hawk.contains(key)) {
+            Hawk.put(key, value);
+        }
+    }
+
+    public static App getInstance() {
+        return instance;
+    }
+
+    @Override
+    public void onTerminate() {
+        super.onTerminate();
+        JsLoader.destroy();
+    }
+
+
+    private VodInfo vodInfo;
+    public void setVodInfo(VodInfo vodinfo){
+        this.vodInfo = vodinfo;
+    }
+    public VodInfo getVodInfo(){
+        return this.vodInfo;
+    }
+
+    public static P2PClass getp2p() {
+        try {
+            if (p == null) {
+                p = new P2PClass(FileUtils.getExternalCachePath());
+            }
+            return p;
+        } catch (Exception e) {
+            LOG.e(e.toString());
+            return null;
+        }
+    }
+
+    public Activity getCurrentActivity() {
+        return AppManager.getInstance().currentActivity();
+    }
+
+    public void setDashData(String data) {
+        dashData = data;
+    }
+    public String getDashData() {
+        return dashData;
+    }
+}

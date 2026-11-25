@@ -1,4 +1,33 @@
+pluginManagement {
+    repositories {
+        maven { url 'https://maven.aliyun.com/repository/google' }
+        maven { url 'https://maven.aliyun.com/repository/public' }
+        maven { url 'https://maven.aliyun.com/repository/gradlePlugin' }
+        mavenCentral()
+        gradlePluginPortal()
+        maven { url 'https://dl.google.com/dl/android/maven2/' }
+    }
+}
+
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)
+    repositories {
+        maven { url 'https://maven.aliyun.com/repository/google' }
+        maven { url 'https://maven.aliyun.com/repository/public' }
+        mavenCentral()
+        gradlePluginPortal()
+        maven { url 'https://jitpack.io' }
+        maven { url 'https://maven.aliyun.com/repository/jcenter' }
+        // XWalk 运行时相关（历史遗留，保留以防万一）
+        maven { url 'https://o0halflife0o.github.io/crosswalk/releases/crosswalk/android/maven2' }
+        maven { url 'http://home.jundie.top:81/xwalk/maven2'; allowInsecureProtocol = true }
+    }
+}
+
 rootProject.name = "TVBox"
 include ':app'
 include ':player'
 include ':quickjs'
+include ':catvod'
+include ':chaquo'
+include ':nodejs'

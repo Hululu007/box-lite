@@ -39,9 +39,6 @@ public class HistoryHelper {
         if (!history.contains(value)) {
             history.add(0, value);
         }
-        if (history.size() > 30) {
-            history.remove(30);
-        }
         Hawk.put(HawkConfig.LIVE_API_HISTORY, history);
     }
 
@@ -49,9 +46,6 @@ public class HistoryHelper {
         ArrayList<String> history = Hawk.get(HawkConfig.API_HISTORY, new ArrayList<String>());
         if (!history.contains(value)) {
             history.add(0, value);
-        }
-        if (history.size() > 30) {
-            history.remove(30);
         }
         Hawk.put(HawkConfig.API_HISTORY, history);
     }

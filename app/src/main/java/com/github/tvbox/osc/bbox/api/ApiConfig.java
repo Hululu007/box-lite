@@ -3,11 +3,18 @@ package com.github.tvbox.osc.bbox.api;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.net.Uri;
+import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
+import com.github.catvod.utils.Task;
 import android.text.TextUtils;
 import android.util.Base64;
+import android.widget.Toast;
 import com.github.catvod.crawler.JarLoader;
 import com.github.catvod.crawler.JsLoader;
+import com.github.catvod.crawler.PyLoader;
 import com.github.catvod.crawler.Spider;
+import com.github.catvod.crawler.SpiderNull;
 import com.github.tvbox.osc.bbox.base.App;
 import com.github.tvbox.osc.bbox.bean.*;
 import com.github.tvbox.osc.bbox.server.ControlManager;
@@ -41,6 +48,8 @@ import static com.github.tvbox.osc.bbox.util.RegexUtils.getPattern;
  */
 public class ApiConfig {
     private static ApiConfig instance;
+    // v2.0.0：主线程回调分发用（Node 配置源链路）
+    private static final Handler MAIN = new Handler(Looper.getMainLooper());
     private final LinkedHashMap<String, SourceBean> sourceBeanList;
     private SourceBean mHomeSource;
     private ParseBean mDefaultParse;
@@ -57,7 +66,11 @@ public class ApiConfig {
 
     private final JarLoader jarLoader = new JarLoader();
     private final JsLoader jsLoader = new JsLoader();
-    // private final IPyLoader pyLoader =  new pyLoader();
+    private final PyLoader pyLoader = new PyLoader();
+    // Node(node: 前缀) 源当前 Spider（供 proxyLocal 转发；与 pyLoader.recentKey 同约定）
+    private volatile Spider recentNodeSpider;
+    // v2.0.0：recentNodeSpider 对应的源 api，用于同源复用避免重复 POST /init
+    private volatile String recentNodeApi;
     private final Gson gson;
 
     private final String userAgent = "okhttp/3.15";
@@ -277,6 +290,48 @@ public class ApiConfig {
             callback.error("-1");
             return;
         }
+        // v2.0.0（A1）：Node 配置源接线——地址以 index.js.md5 结尾时，改由内嵌 Node 运行时
+        // 现场生成配置 JSON（下载 bundle + 启动 Node + GET /config，全部在后台线程）。
+        // 此前 v1.1.x 该形态完全未接线：node: 源静默失效（recover() 因无 bundle 直接抛错）。
+        // 设计约束：阻塞链（NodeClient.load 最长 45s）绝不落在主线程；回调经 MAIN 分发，
+        // 与 OkGo 路径语义一致。Node 配置源不走缓存捷径——缓存的 JSON 引用 node: 路由，
+        // 必须先有运行中的 Node 服务（bundle 层自带 md5 增量下载，重复加载成本低）。
+        if (NodeRuntime.isConfig(apiUrl)) {
+            final File nodeCache = new File(App.getInstance().getFilesDir().getAbsolutePath() + "/" + MD5.encode(apiUrl));
+            Task.execute(() -> {
+                try {
+                    String json = NodeRuntime.get().client().loadConfig(apiUrl).json();
+                    // v2.0.0：Node bundle 重载会使 client session 递增，旧缓存的 NodeSpider 会因
+                    // checkSession 持续抛异常而失效（表现为刷新配置后 node 源全废直到重启）。
+                    // 这里只复位 Spider 缓存，不动 NodeRuntime（服务刚启动不能 clear）。
+                    resetNodeSpiderCache();
+                    FileUtils.saveCache(nodeCache, json);
+                    MAIN.post(() -> {
+                        try {
+                            parseJson(apiUrl, json);
+                            callback.success();
+                        } catch (Throwable th) {
+                            th.printStackTrace();
+                            callback.error("解析配置失败");
+                        }
+                    });
+                } catch (Throwable th) {
+                    LOG.e("Node 配置源加载失败: " + th);
+                    MAIN.post(() -> {
+                        if (nodeCache.exists()) {
+                            try {
+                                parseJson(apiUrl, nodeCache);
+                                callback.success();
+                                return;
+                            } catch (Throwable ignored) {
+                            }
+                        }
+                        callback.error("Node 配置源加载失败\n" + (th.getMessage() == null ? th.toString() : th.getMessage()));
+                    });
+                }
+            });
+            return;
+        }
         File cache = new File(App.getInstance().getFilesDir().getAbsolutePath() + "/" + MD5.encode(apiUrl));
         if (useCache && cache.exists()) {
             try {
@@ -392,6 +447,8 @@ public class ApiConfig {
                                 if (imgJar == null || imgJar.length == 0) {
                                     LOG.e("echo---Generated JAR data is empty");
                                     callback.error("JAR 是空的");
+                                    // v2.0.1：原实现此处缺 return，会对 null 执行 fos.write 抛 NPE
+                                    return null;
                                 }
                                 fos.write(imgJar);
                             } else {
@@ -414,13 +471,15 @@ public class ApiConfig {
                     public void onSuccess(Response<File> response) {
                         File file = response.body();
                         if (file != null && file.exists()) {
-                            // B-07：下载完成立即校验 MD5，不匹配的包一律不加载
+                            // v2.0.1（B-07 修订·兼容优先）：生态里大量配置把 ";md5;" 当缓存刷新标记而非真实 MD5
+                            // （源方更新 jar 不改 md5 / 填随机串），"不匹配即拒载"会把这类源直接打死。
+                            // 且 md5 与 jar 同通道传输，真实 MITM 可同时篡改两者，强校验无实质增益。
+                            // 改为知情提示后照常加载；缓存命中判断（上方 line 407）仍用 md5，
+                            // 源方更新 jar 后仍会触发重新下载，缓存新鲜度语义不变。
                             if (md5 != null && !md5.isEmpty()
                                     && !MD5.getFileMd5(file).equalsIgnoreCase(md5)) {
-                                LOG.e("echo---jar md5 mismatch, discard");
-                                file.delete();
-                                callback.error("MD5 校验失败");
-                                return;
+                                LOG.e("echo---jar md5 mismatch (config=" + md5 + ", actual=" + MD5.getFileMd5(file) + "), still load for compatibility");
+                                Toast.makeText(App.getInstance(), "jar 校验值与配置不符（源方 md5 未同步），已照常加载", Toast.LENGTH_LONG).show();
                             }
                             try {
                                 if (jarLoader.load(file.getAbsolutePath())) {
@@ -482,6 +541,12 @@ public class ApiConfig {
             sb.setName(obj.has("name")?obj.get("name").getAsString().trim():siteKey);
             sb.setType(obj.get("type").getAsInt());
             sb.setApi(obj.get("api").getAsString().trim());
+            // 任务4门控：API<24 设备剔除 Python(.py)/Node(node:) 源
+            // （chaquopy C 扩展 wheel 仅 android_24 标签、node 运行时门槛 API 24，避免用户选中后崩溃）
+            if (Build.VERSION.SDK_INT < 24) {
+                String gatedApi = sb.getApi();
+                if (gatedApi.startsWith("node:") || gatedApi.contains(".py")) continue;
+            }
             sb.setSearchable(DefaultConfig.safeJsonInt(obj, "searchable", 1));
             sb.setQuickSearch(DefaultConfig.safeJsonInt(obj, "quickSearch", 1));
             if(siteKey.startsWith("py_")){
@@ -1115,20 +1180,17 @@ public class ApiConfig {
                     }
                     if(type.equals("3")){
                         String jarUrl = livesOBJ.has("jar")?livesOBJ.get("jar").getAsString().trim():"";
-                        // String pyApi = livesOBJ.has("api")?livesOBJ.get("api").getAsString().trim():"";
-                        // LOG.i("echo-pyApi1"+pyApi);
-                        // if(pyApi.contains(".py")){
-                        //     LOG.i("echo-pyLoader.getSpider");
-                        //     String ext="";
-                        //     if(livesOBJ.has("ext") && (livesOBJ.get("ext").isJsonObject() || livesOBJ.get("ext").isJsonArray())){
-                        //         ext=livesOBJ.get("ext").toString();
-                        //     }else {
-                        //         ext=DefaultConfig.safeJsonString(livesOBJ, "ext", "");
-                        //     }
-                        //
-                        //     pyLoader.getSpider(MD5.string2MD5(pyApi),pyApi,ext);
-                        // }
-                        if(!jarUrl.isEmpty()){
+                        String pyApi = livesOBJ.has("api")?livesOBJ.get("api").getAsString().trim():"";
+                        if(pyApi.contains(".py")){
+                            // Python 直播源：.py 结尾的 api 直接经内嵌 Python 运行时加载
+                            String pyExt="";
+                            if(livesOBJ.has("ext") && (livesOBJ.get("ext").isJsonObject() || livesOBJ.get("ext").isJsonArray())){
+                                pyExt=livesOBJ.get("ext").toString();
+                            }else {
+                                pyExt=DefaultConfig.safeJsonString(livesOBJ, "ext", "");
+                            }
+                            pyLoader.getSpider(MD5.string2MD5(pyApi),pyApi,pyExt);
+                        }else if(!jarUrl.isEmpty()){
                             jarLoader.loadLiveJar(jarUrl);
                         }else if(!liveSpider.isEmpty()){
                             jarLoader.loadLiveJar(liveSpider);
@@ -1182,7 +1244,7 @@ public class ApiConfig {
     public void setLiveJar(String liveJar)
     {
         if(liveJar.contains(".py")){
-            // pyLoader.setRecentPyKey(liveJar);
+            pyLoader.setRecentKey(liveJar);
         }else {
             String jarUrl=!liveJar.isEmpty()?liveJar:liveSpider;
             jarLoader.setRecentJarKey(MD5.string2MD5(jarUrl));
@@ -1195,18 +1257,52 @@ public class ApiConfig {
     }
 
     public Spider getCSP(SourceBean sourceBean) {
+        // Node 源（api 以 node: 开头）：走内嵌 NodeJS 运行时；API<24 回退 SpiderNull（runtime 门槛 24）
+        if (sourceBean.getApi().startsWith("node:")) {
+            return getNodeCSP(sourceBean);
+        }
         if (sourceBean.getApi().endsWith(".js") || sourceBean.getApi().contains(".js?")){
             return jsLoader.getSpider(sourceBean.getKey(), sourceBean.getApi(), sourceBean.getExt(), sourceBean.getJar());
         }
-        // else if (sourceBean.getApi().contains(".py")) {
-        //     return pyLoader.getSpider(sourceBean.getKey(), sourceBean.getApi(), sourceBean.getExt());
-        // }
+        else if (sourceBean.getApi().contains(".py")) {
+            // chaquopy C 扩展 wheel 仅 android_24 标签：API<24 禁用 .py 源（任务4门控）
+            if (Build.VERSION.SDK_INT < 24) return new SpiderNull();
+            return pyLoader.getSpider(sourceBean.getKey(), sourceBean.getApi(), sourceBean.getExt());
+        }
         else return jarLoader.getSpider(sourceBean.getKey(), sourceBean.getApi(), sourceBean.getExt(), sourceBean.getJar());
     }
 
-    // public Spider getPyCSP(String url) {
-    //     return pyLoader.getSpider(MD5.string2MD5(url), url, "");
-    // }
+    private Spider getNodeCSP(SourceBean sourceBean) {
+        if (Build.VERSION.SDK_INT < 24) return new SpiderNull();
+        // v2.0.0（A1）：主线程绝不接触 Node——spider.init 是同步 HTTP（POST /init，FAST_CLIENT 15s），
+        // 主线程调用会 ANR 或直接 NetworkOnMainThreadException。主线程一律快速失败返回 SpiderNull
+        // （WebView 嗅探 checkVideoFormat 等场景自然回退 VideoParseRuler 兜底；播放/搜索/详情等
+        // 主流程已确认全部在后台线程执行）。运行时启动已前移到 loadConfig 接线处（后台）。
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            LOG.i("getNodeCSP on main thread, fallback SpiderNull: " + sourceBean.getKey());
+            return new SpiderNull();
+        }
+        try {
+            String api = sourceBean.getApi();
+            // v2.0.0：同源复用——避免每次 getCSP 都新建 NodeSpider 重复 POST /init（旧审计 P2）。
+            // 会话失效由 clearLoader() 统一复位（recentNodeSpider/recentNodeApi 同时置空）；
+            // Node 服务意外死亡时 NodeClient.recover() 会自动重启并重放已注册的 /init。
+            Spider cached = recentNodeSpider;
+            if (cached != null && api.equals(recentNodeApi)) return cached;
+            Spider sp = NodeRuntime.get().client().spider(api);
+            sp.init(App.getInstance(), sourceBean.getExt());
+            recentNodeSpider = sp;
+            recentNodeApi = api;
+            return sp;
+        } catch (Throwable th) {
+            th.printStackTrace();
+        }
+        return new SpiderNull();
+    }
+
+    public Spider getPyCSP(String url) {
+        return pyLoader.getSpider(MD5.string2MD5(url), url, "");
+    }
 
     public Object[] proxyLocal(Map<String, String> param) {
         if ("js".equals(param.get("do"))) {
@@ -1219,8 +1315,17 @@ public class ApiConfig {
             SourceBean sourceBean = ApiConfig.get().getHomeSourceBean();
             apiString = sourceBean.getApi();
         }
-        // return apiString.contains(".py") ? pyLoader.proxyInvoke(param) : jarLoader.proxyInvoke(param);
-        return apiString.contains(".py") ? null : jarLoader.proxyInvoke(param);
+        if (apiString.startsWith("node:")) return nodeProxyInvoke(param);
+        return apiString.contains(".py") ? pyLoader.proxyInvoke(param) : jarLoader.proxyInvoke(param);
+    }
+
+    private Object[] nodeProxyInvoke(Map<String, String> param) {
+        try {
+            Spider sp = recentNodeSpider;
+            if (sp != null) return sp.proxyLocal(param);
+        } catch (Throwable ignored) {
+        }
+        return null;
     }
 
     public JSONObject jsonExt(String key, LinkedHashMap<String, String> jxs, String url) {
@@ -1386,7 +1491,29 @@ public class ApiConfig {
 
     public void clearLoader(){
         jarLoader.clear();
-        //pyLoader.clear();
+        pyLoader.clear();
         jsLoader.clear();
+        // Node：销毁当前 Spider、复位本地代理引用、停掉 Node 运行时
+        try {
+            if (recentNodeSpider != null) recentNodeSpider.destroy();
+        } catch (Throwable ignored) {
+        }
+        recentNodeSpider = null;
+        recentNodeApi = null;
+        NodeRuntime.get().clear();
+    }
+
+    /**
+     * v2.0.0：仅复位 Node Spider 缓存（销毁旧实例 + 清 api 引用），不触碰 NodeRuntime。
+     * 用于 Node 配置源重载（session 递增）后让下一次 getCSP 重建 Spider，
+     * 避免旧 session Spider 持续 checkSession 异常导致 node 源全部失效。
+     */
+    public void resetNodeSpiderCache() {
+        try {
+            if (recentNodeSpider != null) recentNodeSpider.destroy();
+        } catch (Throwable ignored) {
+        }
+        recentNodeSpider = null;
+        recentNodeApi = null;
     }
 }
